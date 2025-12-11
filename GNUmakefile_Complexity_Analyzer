@@ -1,0 +1,443 @@
+################################################################################
+# GNUmakefile : GNU makefile for ir3c_avg_raw_images.cpp
+#
+#   This is the Makefile for a program that averages IR3C image data. Included
+# in this Makefile is are source code complexity analyzers that are invoked
+# upon a successful release and debug build.
+#
+# CALLING SEQUENCE      make [target]
+#
+# EXAMPLES              make (Makes first rule, which acts like "make release")
+#                       make all (Combination of make release & make debug)
+#                       make release (Make release executable code)
+#                       make debug (Make debug executable code)
+#                       make clean  (Deletes all targets)
+#                       make remake (Combination of make clean & make all)
+#                       make lint (Perform static code analysis)
+#                       make file.PRE (Run preprocessor on source files)
+#
+# TARGET SYSTEM         Linux
+#
+# DEVELOPMENT SYSTEM    Linux, GNU make
+#
+# CALLS                 g++, cppcheck
+#
+# CALLED BY             N/A
+#
+# INPUTS                ir3c_avg_raw_images.cpp
+#
+# OUTPUTS               Executable file ir3c_avg_raw_images
+#
+# RETURNS               Not Applicable
+#
+# ERROR HANDLING        If there is an error in a rule, make gives up on the
+#                       current rule.
+#
+# WARNINGS              1. "make lint" invokes cppcheck, not lint.
+#                      (2. Describe anything a maintainer should be aware of)
+#                      (N. Describe anything a maintainer should be aware of)
+#
+################################################################################
+
+# Where is the base directory from here?
+BASE := ../../..
+
+# Source file suffix used (.c for C language, .cc or .cpp for C++)
+#SUFX := .c
+#SUFX := .cc
+SUFX := .cpp
+
+#
+# Project files
+#
+SRCS = ir3c_avg_raw_images$(SUFX)
+
+# Executable
+EXE  = ir3c_avg_raw_images
+
+#
+# Files from $(BASE)/Common/C++ directory
+#
+COMSRCS := version.cpp msss_essage.cpp
+
+#
+# Compiler
+#
+#X86_C++  := /usr/bin/x86_64-linux-gnu-g++-8
+#ARM_C++  := /usr/bin/arm-linux-gnueabihf-g++-8
+# Make path easier to read by adding line breaks using the ${and} function.
+#ARM_FOR_ASDR_C++ := /opt/arm-unknown-linux-gnueabihf/bin/${and \
+#}arm-unknown-linux-gnueabihf-g++
+# Linaro cross compiler
+# Also uncomment LDFLAGS fix for the Linaro link error.
+ARM_C++   := /opt/${and \
+}gcc-linaro-5.5.0-2017.10-i686_arm-linux-gnueabihf/${and \
+}bin/arm-linux-gnueabihf-g++
+
+# Set compiler to one of the above options
+C++ := $(ARM_C++)
+#C++ := $(X86_C++)
+#C++ := /usr/bin/g++
+# Uncomment the below to use the Parfait static code analysis tool.
+# Parfait must be added to the PATH with something similar to:
+# export PATH=$PATH:/home/nygren/tmp/Parfait/parfait-tools-2023.09-beta/bin
+#PARFAIT_NATIVECC  := $(ARM_C++)
+#C++  := parfait-g++
+
+# Complexity Analyzers
+PMCCABE := /bin/pmccabe
+PMCCABE_OPTIONS      := -v   # Verbose - print column headers
+PMCCABE_OPTIONS      += -c   # Count uncommented lines/funcs not raw lines/funcs
+PMCCABE_OPTIONS      += -f   # Print per-file complexity totals
+GNU_COMPLEXITY := /bin/complexity
+GNU_COMPLEXITY_OPTIONS  := --histogram   # display complexity number histogram
+GNU_COMPLEXITY_OPTIONS  += --score       # display the score for each procedure
+GNU_COMPLEXITY_OPTIONS  += --threshold=0 # reporting threshold
+
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# ^^^^^^^^^^ Place code that may need modification above this point. ^^^^^^^^^^
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+# Object file prefixes are the same as the source files
+OBJS := $(SRCS:$(SUFX)=.o)
+
+#
+# Project Directories
+#
+RELDIR := release
+DBGDIR := debug
+COMDIR := $(BASE)/Common/C++
+
+# If executed outside of a git repository or without git being installed,
+# what the GIT_COMMIT is set to when compiling the print version function.
+# A maximum of 16 hex digits is allowed for a uint64_t.
+# ABSENT_GIT_COMMIT := 012345678ABCDEF0
+# Hex words for "Decoded Git Dead"
+ABSENT_GIT_COMMIT := DEC0DED617DEAD
+
+# It is a good practice to always explicitly state which shell make uses
+SHELL := /bin/sh
+
+#
+# Version tracking
+#
+# Use target specific variables here so these commands are run only when
+# release or debug builds are made. This way if a make install or uninstall
+# is requested on a system without git, we don't get an error message.
+release debug: BUILDER      := $(shell /usr/bin/id -un | /usr/bin/cut -c1-8)
+release debug: DAYTIME      := $(shell /bin/date +%C%y-%m-%d_%H%M%S)
+#release debug: EPOCH        := $(shell /bin/date +%s)
+# If git exists and is executable AND we're making in a git repository,
+# set GIT_COMMIT to the git commit, otherwise set it to ABSENT_GIT_COMMIT
+# so this GIT_COMMIT variable doesn't cause an error when making outside git.
+release debug: GIT_COMMIT   := 0x$(shell \
+if $$([ -x /usr/bin/git ] && \
+/usr/bin/git rev-parse --git-dir > /dev/null 2>&1); \
+then echo $$(/usr/bin/git rev-parse --short=16 HEAD); \
+else echo $(ABSENT_GIT_COMMIT); fi)
+# SERIALNO        := 3 # Not needed for most SW
+# Command line defines
+# (uses "=" for recursively expanded variable)
+CMDLINEDEFS     = -DBuilder=\"$(BUILDER)\"
+#CMDLINEDEFS     += -DSerialNo=$(SerialNo)
+#CMDLINEDEFS     += -DEpoch=$(EPOCH)
+CMDLINEDEFS     += -DDaytime=\"$(DAYTIME)\"
+CMDLINEDEFS     += -DCommit=$(GIT_COMMIT)
+
+#
+# Compiler options
+#
+# The plan is to enable every warning reasonably possible, and make them errors
+# so they get fixed in the source code and not waived or ignored.
+#
+# -pedantic-errors -> Make failure to conform to a standard an error.
+# -Wall         -> Enable all warnings
+# -Werror       -> Make warnings errors
+# -Wextra       -> Add some extra warnings not added by -Wall
+# -I dir        -> Add search for header files listed in the both
+#                  the #include "file" and #include <file> directives.
+# -iquote dir   -> Add search for header files listed in the form
+#                  #include "file" in these directories
+# -MMD          -> Ask the C pre-processor to write make rules to dependency
+#                  file(s) (.d for dependency extension) so #included local
+#                  header file dependencies don't have to be manually written.
+#                  This works in tandem with the following line in between
+#                  object and executable generation:
+#                  -include $(XXXOBJS:.o=.d)
+#                  -MMD omits system headers from the generated dependencies.
+#                  Use -MD to also preserve system headers as prerequisites.
+# -MP           -> This option instructs CPP to add a phony target for each
+#                  dependency other than the main file, causing each to depend
+#                  on nothing. These dummy rules work around errors that make
+#                  gives if you remove previously #included header files.
+# `pkg-config --cflags --libs libsystemd`
+#               -> pkg-config retrieves information about (most) installed
+#                  libraries and automatically creates the flags necessary
+#                  to compile using a given library.
+C++OPTIONS      := -std=gnu++14
+C++OPTIONS      += -pedantic-errors
+C++OPTIONS      += -Wall
+C++OPTIONS      += -Werror
+C++OPTIONS      += -Wextra
+C++OPTIONS      += -iquote ./Include
+C++OPTIONS      += -iquote $(BASE)/Common/C++/Include
+C++OPTIONS      += -MMD
+C++OPTIONS      += -MP
+#
+# The -v option is useful for debugging paths etc.
+#CC++OPTIONS      += -v
+# i2c-dev is a header only package, therefore there is no library to link to.
+#C++OPTIONS      += `pkg-config --cflags --libs libi2c` // N/A per above
+
+#
+# Linker options
+#
+# The -llibrary option is passed directly to the linker by gcc/g++.
+# It searches the library named "library" when linking.
+# The -Wl,option passes "option" as an option to the linker.
+# The -rpath-link=dir option is used when one shared library requires another.
+# The -rpath-link option specifies the first set of directories to search.
+# The -rpath-link option may specify a sequence of directory names by specifying
+# a list of names separated by colons.
+# This option should be used with caution as it overrides the search path that
+# may have been hard compiled into a shared library. In such a case it is
+# possible to use unintentionally a different search path than the runtime
+# linker would do.
+LDFLAGS      := -Wl,-rpath-link=/opt/arm-unknown-linux-gnueabihf/lib
+#LDLIBS       := -lsystemd
+# The pkg-config method of linking the correct libraries doesn't work for
+# the Rincon cross compiler.
+#CC_OPTIONS      += `pkg-config --cflags --libs libsystemd`
+# LDFLAGS & LDLIBS are not needed with pkg-config and the Debian cross compilers
+#LDFLAGS      =
+#LDLIBS       =
+# Fix for the following Linaro link error:
+# ld: cannot find /usr/lib/libc.so.6 or /usr/lib/ld-linux-armhf.so.3 inside
+# ./arm-linux-gnueabihf/libc
+# Make path easier to read by adding line breaks using the ${and} function.
+LDFLAGS         += -L/opt/${and \
+}gcc-linaro-5.5.0-2017.10-i686_arm-linux-gnueabihf/${and \
+}arm-linux-gnueabihf/libc/usr/lib
+# End fix for Linaro link error
+# LDLIBS is not needed with pkg-config and the Linaro cross compiler
+#LDLIBS       =
+
+
+#
+# Lint
+#
+LINT            := /usr/bin/cppcheck
+#
+# Lint options / includes
+#
+LINTOPTIONS     := --verbose
+LINTOPTIONS     += --enable=all
+LINTOPTIONS     += --suppress=missingIncludeSystem
+
+LINTCHECKCONFIG := --check-config
+LINTCHECKCONFIG += --suppress=missingIncludeSystem
+
+LINTINCLUDES    := -I ./Include
+LINTINCLUDES    += -I $(BASE)/Common/C++/Include
+
+#
+# Release build settings
+#
+RELEXE := $(RELDIR)/$(EXE)
+RELOBJS := $(addprefix $(RELDIR)/, $(OBJS))
+RELCOMMONOBJS := $(addprefix $(COMDIR)/$(RELDIR)/, $(COMSRCS:$(SUFX)=.o))
+#
+# Release compiler options
+#
+# -DNDEBUG  -> compiles "#ifdef NDEBUG" code
+# -O3       -> Optimize executable to a very high level
+RELC++OPTIONS := -DNDEBUG
+RELC++OPTIONS += -O3
+
+#
+# Debug build settings
+#
+DBGEXE := $(DBGDIR)/$(EXE)
+DBGOBJS := $(addprefix $(DBGDIR)/, $(OBJS))
+DBGCOMMONOBJS := $(addprefix $(COMDIR)/$(DBGDIR)/, $(COMSRCS:$(SUFX)=.o))
+#
+# Debug compiler options
+#
+# -ggdb     -> Produce debugging information for use by the GNU Debugger (GDB)
+# -DDEBUG   -> compiles "#ifdef DEBUG" code
+# -Og       -> Enable optimizations that do not interfere with debugging.
+DBGC++OPTIONS := -ggdb
+DBGC++OPTIONS += -DDEBUG
+DBGC++OPTIONS += -Og
+
+# ARM gcc/g++ compiler options
+#
+# Automatic vectorization can generate code targeted for NEON from ordinary
+# source code so less effort to is required produce efficient code. Code
+# becomes portable as no compiler specific source code features need to be used.
+#
+# To enable automatic vectorization on gcc/g++, use these options together:
+# -mcpu=cortex-a9   -> Specify ARMv7-A processor
+# -mfpu=neon        -> enable NEON support
+# -mfloat-abi=hard  -> A 'hard' setting allows generation of floating-point
+#                      instructions and uses FPU-specific calling conventions.
+#                      *** If using the option "hard", you must compile and  ***
+#                      *** link the entire source code with the same setting!***
+#                      if set to "softfp" (but not "soft") this allows the
+#                      generation of code using hardware floating-point
+#                      instructions, but still uses the soft-float calling
+#                      conventions, so all code doesn't need to be re-compiled.
+# -funsafe-math-optimizations ->
+#                      If the selected floating-point hardware includes the NEON
+#                      extension (e.g. -mfpu=neon), note that floating-point
+#                      operations are not generated by GCC's auto-vectorization
+#                      pass unless -funsafe-math-optimizations specified.
+#                      This is because NEON hardware does not fully implement
+#                      the IEEE 754 standard for floating-point arithmetic.
+# -ftree-vectorize  -> Support SIMD on many arch (-O3 implies)
+# -ftree-vectorize-verbose=1  -> Takes an integer value specifying the level
+#                      of detail to provide, where 1 enables additional
+#                      printouts and higher values add even more information.
+#                      Indicates what vectorization the compiler is
+#                      performing, or what it is unable to perform because of
+#                      possible dependencies.
+ARM_OPTIONS := -mcpu=cortex-a9
+#ARM_OPTIONS += -mfpu=neon
+#ARM_OPTIONS += -funsafe-math-optimizations
+ARM_OPTIONS += -mfloat-abi=hard
+ARM_OPTIONS += -ftree-vectorize
+ARM_OPTIONS += -ftree-vectorizer-verbose=1
+
+# If the ARM compiler is being used, use the ARM compiler options on both
+# release and debug code.
+ifeq ($(C++),$(ARM_C++))
+    RELC++OPTIONS += $(ARM_OPTIONS)
+    DBGC++OPTIONS += $(ARM_OPTIONS)
+endif
+
+#
+# Rules
+#
+
+# ### Rule to make release and debug executable and object files ###
+.PHONY: all
+
+# Default build makes debug and release directories and release executables
+all: release debug complexity
+
+complexity: $(RELEXE) $(DBGEXE)
+	@echo
+	@echo "*** pmccabe Source Code Analyzer Results ***"
+	$(PMCCABE) $(PMCCABE_OPTIONS) $(SRCS) $(addprefix $(COMDIR)/,$(COMSRCS))
+	@echo
+	@echo "*** GNU complexity Source Code Analyzer Results ***"
+	$(GNU_COMPLEXITY) $(GNU_COMPLEXITY_OPTIONS) $(SRCS) \
+	$(addprefix $(COMDIR)/,$(COMSRCS))
+
+# ### Rule to make release object and executable files ###
+# Automatic variables:
+# $^ Space delimited names of all the prerequisites
+# $@ File name of the target of the rule
+# $< Name of the first prerequisite
+# #### Automatically detect changes in included files
+# As all the object files are listed with $(XXXOBJS) and the C pre-processor
+# is set to add rules to a dependency file (by adding -MMD -MP to the compiler
+# flags/options), the following line pulls in these dependencies:
+#-include $(XXXOBJS:.o=.d)
+release: $(RELEXE)
+
+$(RELEXE): $(RELOBJS) $(RELCOMMONOBJS)
+	$(C++) $(C++OPTIONS) $(RELC++OPTIONS) -o $(RELEXE) $^ \
+	$(LDLIBS) $(LDFLAGS) && \
+	/bin/chmod 755 $@
+	@echo
+	@echo "*** Ensure any shared libraries referenced on the build  ***"
+	@echo "*** platform match the shared libraries available on the ***"
+	@echo "*** target platform.                                     ***"
+	/usr/bin/readelf --dynamic \
+            $(RELEXE) | grep 'NEEDED'
+	@echo
+	@echo "*** Compare $(RELEXE) file size to an expected value ***"
+	/bin/ls -lh $(RELEXE)
+	@echo
+
+-include $(RELOBJS:.o=.d)
+
+$(RELDIR)/%.o: %$(SUFX)
+	/bin/mkdir -p $(RELDIR)
+	$(C++) -c $(C++OPTIONS) $(RELC++OPTIONS) -o $@ $<
+
+$(BASE)/Common/C++/$(RELDIR)/%.o: $(BASE)/Common/C++/%$(SUFX)
+	/bin/mkdir -p  $(BASE)/Common/C++/$(RELDIR)
+	$(C++) -c $(C++OPTIONS) $(RELC++OPTIONS) $(CMDLINEDEFS) -o $@ $<
+
+# ### Rule to make debug object and executable files ###
+# Automatic variables:
+# $^ Space delimited names of all the prerequisites
+# $@ File name of the target of the rule
+# $< Name of the first prerequisite
+# #### Automatically detect changes in included files
+# As all the object files are listed with $(XXXOBJS) and the C pre-processor
+# is set to add rules to a dependency file (by adding -MMD -MP to the compiler
+# flags/options), the following line pulls in these dependencies:
+#-include $(XXXOBJS:.o=.d)
+debug: $(DBGEXE)
+
+$(DBGEXE): $(DBGOBJS) $(DBGCOMMONOBJS)
+	$(C++) $(C++OPTIONS) $(DBGC++OPTIONS) -o $(DBGEXE) $^ \
+	$(LDLIBS) $(LDFLAGS) && \
+	/bin/chmod 755 $@
+	@echo
+	@echo "*** Ensure any shared libraries referenced on the build  ***"
+	@echo "*** platform match the shared libraries available on the ***"
+	@echo "*** target platform.                                     ***"
+	/usr/bin/readelf --dynamic \
+            $(DBGEXE) | grep 'NEEDED'
+	@echo
+	@echo "*** Compare $(DBGEXE) file size to an expected value ***"
+	/bin/ls -lh $(DBGEXE)
+
+-include $(DBGOBJS:.o=.d)
+
+$(DBGDIR)/%.o: %$(SUFX)
+	/bin/mkdir -p $(DBGDIR)
+	$(C++) -c $(C++OPTIONS) $(DBGC++OPTIONS) -o $@ $<
+
+$(BASE)/Common/C++/$(DBGDIR)/%.o: $(BASE)/Common/C++/%$(SUFX)
+	/bin/mkdir -p  $(BASE)/Common/C++/$(DBGDIR)
+	$(C++) -c $(C++OPTIONS) $(DBGC++OPTIONS) $(CMDLINEDEFS) -o $@ $<
+
+#
+# Other rules
+#
+.PHONY: clean lint remake
+
+# ### Rule to clean out executable, object, dependency and *.PRE files ###
+# The "-" at the beginning of the command tells GNU make ignore errors like
+# file not present etc. There is no need to delete parent directories that
+# were created with "mkdir -p", since they could have existed anyway.
+# .d files are dependency files.
+# .bc files are bitcode files from the Parfait static code analysis tool.
+clean:
+	-/bin/rm -f $(RELEXE) $(RELOBJS) $(RELDIR)/*.d $(RELDIR)/*.bc \
+$(DBGEXE) $(DBGOBJS) $(DBGDIR)/*.d $(DBGDIR)/*.bc \
+$(RELCOMMONOBJS) $(COMDIR)/$(RELDIR)/*.d $(COMDIR)/$(RELDIR)/*.bc \
+$(DBGCOMMONOBJS) $(COMDIR)/$(DBGDIR)/*.d $(COMDIR)/$(DBGDIR)/*.bc \
+*.PRE
+
+# ### Rule to perform static code analysis ###
+lint:
+	$(LINT) $(LINTCHECKCONFIG) $(LINTINCLUDES) $(SRCS)
+	@echo
+	$(LINT) $(LINTOPTIONS) $(LINTINCLUDES) $(SRCS)
+
+# ### Rule to clean and then re-make ###
+remake: clean all
+
+# #### Rule to only run the preprocessor on a source file
+# Useful for checking / debugging macros
+# Using the GNU Compiler -E option, nothing happens except preprocessing.
+# Example: $ make file.PRE
+# The above will create the preprocessed file.PRE from the source file.
+%.PRE : %$(SUFX)
+	$(C++) $(LINTINCLUDES) -E $< -o $@
