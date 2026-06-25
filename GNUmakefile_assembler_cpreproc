@@ -1,0 +1,654 @@
+################################################################################
+# GNUmakefile : GNU makefile for payload_agent.cpp
+#
+# Created by Dan Nygren
+# Email: nygren@msss.com
+# Permanent Email: dan.nygren@gmail.com
+#
+#   Makefile for a program that acts as a payload agent for ASI's MAX.
+#
+# CALLING SEQUENCE      make [target]
+#
+# EXAMPLES              make (The same as "make all")
+#                       make all (Combination of make release & make debug)
+#                       make release (Make release executable code)
+#                       make debug (Make debug executable code)
+#                       make clean  (Deletes all target and distribution files)
+#                       make remake (Combination of make clean & make all)
+#                       make dist (Make a distribution file)
+#                       make install (Copies payload_agent to where it is used)
+#                       make systemd (Enables systemd service)
+#                       make uninstall (stops & disables systemd & uninstalls)
+#                       make lint (Perform static code analysis)
+#                       make cpreproc (Run the C preprocessor on source file)
+#                       make assembler (Run assembler on source file)
+#
+# TARGET SYSTEM         Linux
+#
+# DEVELOPMENT SYSTEM    Linux, GNU make
+#
+# CALLS                 g++, cppcheck, readelf, ls
+#
+# CALLED BY             N/A
+#
+# INPUTS                C++ source files
+#
+# OUTPUTS               Executable files
+#
+# RETURNS               Not Applicable
+#
+# ERROR HANDLING        If there is an error in a rule, make gives up on the
+#                       current rule.
+#
+# WARNINGS              1. "make lint" invokes cppcheck, not lint.
+#                       2. pkg-config retrieves information needed to compile
+#                          most, but not all, installed libraries.
+#                          Run at the command line to see the flags generated:
+#                          pkg-config --cflags <library>
+#                          pkg-config --libs <library>
+#                      (N. Describe anything a maintainer should be aware of)
+################################################################################
+
+# Where is the base directory from here?
+BASE := ..
+
+# Source file suffix used (.c for C language, .cc or .cpp for C++)
+#SUFX := .c
+#SUFX := .cc
+SUFX := .cpp
+
+#
+# Project files
+#
+SRCS := payload_agent.cpp msss_essage.cpp
+
+# Executable
+EXE := payload_agent
+
+#
+# Files from $(BASE)/Common/C++ directory
+#
+#COMSRCS := version.cc
+COMSRCS := version.cpp
+
+#
+# Compiler
+#
+#X86_C++  := /usr/bin/x86_64-linux-gnu-g++-8
+#ARM_C++  := /usr/bin/arm-linux-gnueabihf-g++-8
+# Make path easier to read by adding line breaks using the ${and} function.
+#ARM_FOR_ASDR_C++ := /opt/arm-unknown-linux-gnueabihf/bin/${and \
+#}arm-unknown-linux-gnueabihf-g++
+# Linaro cross compiler
+# Also uncomment LDFLAGS fix for the Linaro link error.
+ARM_C++   := /opt/${and \
+}gcc-linaro-5.5.0-2017.10-i686_arm-linux-gnueabihf/${and \
+}bin/arm-linux-gnueabihf-g++
+
+# Set compiler to one of the above options
+C++ := $(ARM_C++)
+#C++ := $(X86_C++)
+#C++ := /usr/bin/g++
+# Uncomment the below to use the Parfait static code analysis tool.
+# Parfait must be added to the PATH with something similar to:
+# export PATH=$PATH:/home/nygren/tmp/Parfait/parfait-tools-2023.09-beta/bin
+#PARFAIT_NATIVECC  := $(ARM_C++)
+#C++  := parfait-g++
+
+#ifeq ($(C++),$(ARM_FOR_ASDR_C++))
+#    # Additional paths are required for ADSR build in order to access the
+#    # correct cross compilation tool chain.
+#    export PATH := /opt/arm-unknown-linux-gnueabihf/bin:$(PATH)
+#    # Make path easier to read by adding line breaks using the ${and} function.
+#    LDLIBPATH := /opt/arm-unknown-linux-gnueabihf/lib:${and \
+#    }/opt/arm-unknown-linux-gnueabihf/x86_64-pc-linux-gnu/${and \
+#    }arm-unknown-linux-gnueabihf/lib
+#    export LD_LIBRARY_PATH := $(LDLIBPATH):$(LD_LIBRARY_PATH)
+#endif
+
+# Enter the xz compressed tarball filename to be created by "make dist"
+DIST_TXZ := payload_agent_dist.tar.xz
+
+# Enter the xz compressed tarball filename to be unpacked by "make install"
+TXZ := payload_agent.tar.xz
+
+# Installation directory
+INSTDIR := /opt/payload_agent
+
+#
+# Project Directories
+#
+RELDIR := release
+DBGDIR := debug
+COMDIR := $(BASE)/Common/C++
+# Location of test scripts
+TSTDIR := Test_Apps
+# Location of example child payload program
+# (Chose debug version as most appropriate child_payload program to test with.)
+CHILDPAYLOAD := ../child_payload/debug/child_payload
+
+# Use release or debug executable?
+# (Not used. Service unit file currently determines if release or debug used.)
+#EXEDIR := $(RELDIR)
+#EXEDIR := $(DBGDIR)
+
+# The plan was to install payload_agent into a system login of "payload_agent"
+# to compartmentalize it from other applications. This is difficult to
+# accomplish on the Rincon ASDR flightcomouter for various reasons, so this
+# capability has been commented out and the owner and group of payload_agent
+# set to root.
+# Name of the system login
+#LOGIN := payload_agent
+LOGIN := root
+
+# Name of the systemd service unit configuration file
+SERVICE := payload_agent.service
+
+# Name of any additional groups associated with the service.
+# The flag is included to avoid an error if there are no additional groups.
+# The uucp group is needed to access "/dev/ttyXXX" on the Zedboard and Rincon
+# Astro SDR.
+#GROUPS := --groups uucp
+# The Raspberry Pi uses the dialout group to access "/dev/ttyXXX"
+#GROUPS := --groups dialout
+# Add this group in order to access the socket file created by MAX.
+# Only needed if MAX is not running as root but under a "max" system login.
+#GROUPS := --groups max
+# You can separate multiple groups with a comma, but you will get an error if
+# both groups do not exist. Usually the uucp OR dialout group exists, not both.
+#GROUPS := --groups uucp,dialout
+
+# If the STAGEDIR variable is undefined (the empty string) it has no effect.
+# When it is defined, it causes installations to be staged to temporary
+# directories for testing or before manually moving them to their final place.
+# Staged installations do not enable or start a service.
+#STAGEDIR := ./tmp_staged
+STAGEDIR :=
+
+# If executed outside of a git repository or without git being installed,
+# what the GIT_COMMIT is set to when compiling the print version function.
+# A maximum of 16 hex digits is allowed for a uint64_t.
+# ABSENT_GIT_COMMIT := 012345678ABCDEF0
+# Hex words for "Decoded Git Dead"
+ABSENT_GIT_COMMIT := DEC0DED617DEAD
+
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# ^^^^^^^^^^ Place code that may need modification above this point. ^^^^^^^^^^
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+# It is a good practice to always explicitly state which shell make uses
+SHELL := /bin/sh
+
+# tar create options
+TARCOPTIONS := --create
+TARCOPTIONS += --auto-compress
+TARCOPTIONS += --verbose
+TARCOPTIONS += --preserve-permissions
+TARCOPTIONS += --file
+
+# tar extract options
+TARXOPTIONS := --extract
+TARXOPTIONS += --auto-compress
+TARXOPTIONS += --verbose
+TARXOPTIONS += --preserve-permissions
+# TARXOPTIONS += --strip-components=1
+
+# Mode that the installed directories can be set to.
+# User read, write, and aXcess the directory
+# Group read and aXcess the directory
+# Others read the directory
+DIRMODE := u=rwx,g=rx,o=r
+
+# Mode that the installed files can be set to.
+# User read and write the file
+# Group read the file
+# Others read the file
+FILEMODE := u=rw,g=r,o=r
+
+# Location of files destined for target installation directory
+TARGET_FILES := ./$(RELDIR)
+TARGET_FILES += ./$(DBGDIR)
+TARGET_FILES += ./$(TSTDIR)
+
+# Full path to executable
+# (Not used. Service unit file currently determines if release or debug used.)
+#EXECUTABLE := $(INSTDIR)/$(EXEDIR)/$(EXE)
+
+# Object file prefixes are the same as the source files
+OBJS := $(SRCS:$(SUFX)=.o)
+# C preprocessor file prefixes are the same as the source files
+CPREPROC := $(SRCS:.cpp=.i)
+# Assembler file prefixes are the same as the source files
+ASSEMBLER := $(SRCS:.cpp=.s)
+
+#(uses "=" for recursively expanded variable)
+EXECMDLINEDEFS := -DInst_Dir=\"$(INSTDIR)\"
+EXECMDLINEDEFS += -DTest_Apps=\"$(TSTDIR)\"
+
+#
+# Version tracking
+#
+# Use target specific variables here so these commands are run only when
+# release or debug builds are made. This way if a make install or uninstall
+# is requested on a system without git, we don't get an error message.
+release debug: BUILDER      := $(shell /usr/bin/id -un | /usr/bin/cut -c1-8)
+release debug: DAYTIME      := $(shell /bin/date +%C%y-%m-%d_%H%M%S)
+#release debug: EPOCH        := $(shell /bin/date +%s)
+# If git exists and is executable AND we're making in a git repository,
+# set GIT_COMMIT to the git commit, otherwise set it to ABSENT_GIT_COMMIT
+# so this GIT_COMMIT variable doesn't cause an error when making outside git.
+release debug: GIT_COMMIT   := 0x$(shell \
+if $$([ -x /usr/bin/git ] && \
+/usr/bin/git rev-parse --git-dir > /dev/null 2>&1); \
+then echo $$(/usr/bin/git rev-parse --short=16 HEAD); \
+else echo $(ABSENT_GIT_COMMIT); fi)
+# SERIALNO        := 3 # Not needed for most SW
+# Common directory command line defines
+#(uses "=" for recursively expanded variable)
+COMCMDLINEDEFS     = -DBuilder=\"$(BUILDER)\"
+#COMCMDLINEDEFS     += -DEpoch=$(EPOCH)
+#COMCMDLINEDEFS     += -DSerialNo=$(SerialNo)
+COMCMDLINEDEFS     += -DDaytime=\"$(DAYTIME)\"
+COMCMDLINEDEFS     += -DCommit=$(GIT_COMMIT)
+
+#
+# Compiler options
+#
+# The plan is to enable every warning reasonably possible, and make them errors
+# so they get fixed in the source code and not waived or ignored.
+#
+# -pedantic-errors -> Make failure to conform to a standard an error.
+# -Wall         -> Enable all warnings
+# -Werror       -> Make warnings errors
+# -Wextra       -> Add some extra warnings not added by -Wall
+# -I dir        -> Add search for header files listed in the both
+#                  the #include "file" and #include <file> directives.
+# -iquote dir   -> Add search for header files listed in the form
+#                  #include "file" in these directories
+# -MMD          -> Ask the C pre-processor to write make rules to dependency
+#                  file(s) (.d for dependency extension) so #included local
+#                  header file dependencies don't have to be manually written.
+#                  This works in tandem with the following line in between
+#                  object and executable generation:
+#                  -include $(XXXOBJS:.o=.d)
+#                  -MMD omits system headers from the generated dependencies.
+#                  Use -MD to also preserve system headers as prerequisites.
+# -MP           -> This option instructs CPP to add a phony target for each
+#                  dependency other than the main file, causing each to depend
+#                  on nothing. These dummy rules work around errors that make
+#                  gives if you remove previously #included header files.
+# `pkg-config --cflags --libs libsystemd`
+#               -> pkg-config retrieves information about (most) installed
+#                  libraries and automatically creates the flags necessary
+#                  to compile using a given library.
+C++OPTIONS      :=  -std=gnu++14
+C++OPTIONS      += -pedantic-errors
+C++OPTIONS      += -Wall
+C++OPTIONS      += -Werror
+C++OPTIONS      += -Wextra
+C++OPTIONS      += -iquote ./Include
+C++OPTIONS      += -iquote $(BASE)/Common/C++/Include
+C++OPTIONS      += -MMD
+C++OPTIONS      += -MP
+#
+# The -v option is useful for debugging paths etc.
+#CC++OPTIONS      += -v
+# i2c-dev is a header only package, therefore there is no library to link to.
+#C++OPTIONS      += `pkg-config --cflags --libs libi2c` // N/A per above
+
+#
+# Linker options
+#
+# The -llibrary option is passed directly to the linker by gcc/g++.
+# It searches the library named "library" when linking.
+# The -Wl,option passes "option" as an option to the linker.
+# The -rpath-link=dir option is used when one shared library requires another.
+# The -rpath-link option specifies the first set of directories to search.
+# The -rpath-link option may specify a sequence of directory names by specifying
+# a list of names separated by colons.
+# This option should be used with caution as it overrides the search path that
+# may have been hard compiled into a shared library. In such a case it is
+# possible to use unintentionally a different search path than the runtime
+# linker would do.
+LDFLAGS      := -Wl,-rpath-link=/opt/arm-unknown-linux-gnueabihf/lib
+LDLIBS       := -lsystemd
+# The pkg-config method of linking the correct libraries doesn't work for
+# the Rincon cross compiler.
+#CC_OPTIONS      += `pkg-config --cflags --libs libsystemd`
+# LDFLAGS & LDLIBS are not needed with pkg-config and the Debian cross compilers
+#LDFLAGS      =
+#LDLIBS       =
+# Fix for the following Linaro link error:
+# ld: cannot find /usr/lib/libc.so.6 or /usr/lib/ld-linux-armhf.so.3 inside
+# ./arm-linux-gnueabihf/libc
+# Make path easier to read by adding line breaks using the ${and} function.
+LDFLAGS         += -L/opt/${and \
+}gcc-linaro-5.5.0-2017.10-i686_arm-linux-gnueabihf/${and \
+}arm-linux-gnueabihf/libc/usr/lib
+# End fix for Linaro link error
+# LDLIBS is not needed with pkg-config and the Linaro cross compiler
+#LDLIBS       =
+
+
+#
+# Lint
+#
+LINT            := /usr/bin/cppcheck
+#
+# Lint options / includes
+#
+LINTOPTIONS     :=  --verbose
+LINTOPTIONS     += --enable=all
+LINTOPTIONS     += --suppress=missingIncludeSystem
+
+LINTCHECKCONFIG :=  --check-config
+LINTCHECKCONFIG += --suppress=missingIncludeSystem
+
+LINTINCLUDES    :=  -I ./Include
+LINTINCLUDES    += -I $(BASE)/Common/C++/Include
+
+#
+# Release build settings
+#
+RELEXE := $(RELDIR)/$(EXE)
+RELOBJS := $(addprefix $(RELDIR)/, $(OBJS))
+RELCOMMONOBJS := $(addprefix $(COMDIR)/$(RELDIR)/, $(COMSRCS:$(SUFX)=.o))
+#
+# Release compiler options
+#
+# -DNDEBUG  -> compiles "#ifdef NDEBUG" code
+# -O3       -> Optimize executable to a very high level
+RELC++OPTIONS := -DNDEBUG
+RELC++OPTIONS += -O3
+
+#
+# Debug build settings
+#
+DBGEXE := $(DBGDIR)/$(EXE)
+DBGOBJS := $(addprefix $(DBGDIR)/, $(OBJS))
+DBGCOMMONOBJS := $(addprefix $(COMDIR)/$(DBGDIR)/, $(COMSRCS:$(SUFX)=.o))
+#
+# Debug compiler options
+#
+# -ggdb     -> Produce debugging information for use by the GNU Debugger (GDB)
+# -DDEBUG   -> compiles "#ifdef DEBUG" code
+# -Og       -> Enable optimizations that do not interfere with debugging.
+DBGC++OPTIONS :=  -ggdb
+DBGC++OPTIONS += -DDEBUG
+DBGC++OPTIONS += -Og
+
+# ARM gcc/g++ compiler options
+#
+# Automatic vectorization can generate code targeted for NEON from ordinary
+# source code so less effort to is required produce efficient code. Code
+# becomes portable as no compiler specific source code features need to be used.
+#
+# To enable automatic vectorization on gcc/g++, use these options together:
+# -mcpu=cortex-a9   -> Specify ARMv7-A processor
+# -mfpu=neon        -> enable NEON support
+# -mfloat-abi=hard  -> A 'hard' setting allows generation of floating-point
+#                      instructions and uses FPU-specific calling conventions.
+#                      *** If using the option "hard", you must compile and  ***
+#                      *** link the entire source code with the same setting!***
+#                      if set to "softfp" (but not "soft") this allows the
+#                      generation of code using hardware floating-point
+#                      instructions, but still uses the soft-float calling
+#                      conventions, so all code doesn't need to be re-compiled.
+# -funsafe-math-optimizations ->
+#                      If the selected floating-point hardware includes the NEON
+#                      extension (e.g. -mfpu=neon), note that floating-point
+#                      operations are not generated by GCC's auto-vectorization
+#                      pass unless -funsafe-math-optimizations specified.
+#                      This is because NEON hardware does not fully implement
+#                      the IEEE 754 standard for floating-point arithmetic.
+# -ftree-vectorize  -> Support SIMD on many arch (-O3 implies)
+# -ftree-vectorize-verbose=1  -> Takes an integer value specifying the level
+#                      of detail to provide, where 1 enables additional
+#                      printouts and higher values add even more information.
+#                      Indicates what vectorization the compiler is
+#                      performing, or what it is unable to perform because of
+#                      possible dependencies.
+ARM_OPTIONS := -mcpu=cortex-a9
+ARM_OPTIONS += -mfpu=neon
+ARM_OPTIONS += -funsafe-math-optimizations
+ARM_OPTIONS += -mfloat-abi=hard
+ARM_OPTIONS += -ftree-vectorize
+ARM_OPTIONS += -ftree-vectorizer-verbose=1
+
+# If the ARM compiler is being used, use the ARM compiler options on both
+# release and debug code.
+ifeq ($(C++),$(ARM_C++))
+    RELC++OPTIONS += $(ARM_OPTIONS)
+    DBGC++OPTIONS += $(ARM_OPTIONS)
+endif
+
+#
+# Rules
+#
+
+# ### Rule to make release and debug executable and object files ###
+.PHONY: all
+
+# Default build makes debug and release directories and release executables
+all: release debug
+
+# ### Rule to make release object and executable files ###
+# Automatic variables:
+# $^ Space delimited names of all the prerequisites
+# $@ File name of the target of the rule
+# $< Name of the first prerequisite
+# #### Automatically detect changes in included files
+# As all the object files are listed with $(XXXOBJS) and the C pre-processor
+# is set to add rules to a dependency file (by adding -MMD -MP to the compiler
+# flags/options), the following line pulls in these dependencies:
+#-include $(XXXOBJS:.o=.d)
+release: $(RELEXE)
+
+$(RELEXE): $(RELOBJS) $(RELCOMMONOBJS)
+	$(C++) $(C++OPTIONS) $(RELC++OPTIONS) $(EXECMDLINEDEFS) -o $(RELEXE) $^ \
+	$(LDLIBS) $(LDFLAGS)
+	@echo
+	@echo "*** Ensure any shared libraries referenced on the build  ***"
+	@echo "*** platform match the shared libraries available on the ***"
+	@echo "*** target platform.                                     ***"
+	/usr/bin/readelf --dynamic \
+            $(RELEXE) | grep 'NEEDED'
+	@echo
+	@echo "*** Compare $(RELEXE) file size to an expected value ***"
+	/bin/ls -lh $(RELEXE)
+	@echo
+
+-include $(RELOBJS:.o=.d)
+
+$(RELDIR)/%.o: %$(SUFX)
+	/bin/mkdir -p $(RELDIR)
+	$(C++) -c $(C++OPTIONS) $(RELC++OPTIONS) $(EXECMDLINEDEFS) -o $@ $<
+
+$(BASE)/Common/C++/$(RELDIR)/%.o: $(BASE)/Common/C++/%$(SUFX)
+	/bin/mkdir -p  $(BASE)/Common/C++/$(RELDIR)
+	$(C++) -c $(C++OPTIONS) $(RELC++OPTIONS) $(COMCMDLINEDEFS) -o $@ $<
+
+# ### Rule to make debug object and executable files ###
+# Automatic variables:
+# $^ Space delimited names of all the prerequisites
+# $@ File name of the target of the rule
+# $< Name of the first prerequisite
+# #### Automatically detect changes in included files
+# As all the object files are listed with $(XXXOBJS) and the C pre-processor
+# is set to add rules to a dependency file (by adding -MMD -MP to the compiler
+# flags/options), the following line pulls in these dependencies:
+#-include $(XXXOBJS:.o=.d)
+debug: $(DBGEXE)
+
+$(DBGEXE): $(DBGOBJS) $(DBGCOMMONOBJS)
+	$(C++) $(C++OPTIONS) $(DBGC++OPTIONS) $(EXECMDLINEDEFS) -o $(DBGEXE) $^ \
+	$(LDLIBS) $(LDFLAGS)
+	@echo
+	@echo "*** Ensure any shared libraries referenced on the build  ***"
+	@echo "*** platform match the shared libraries available on the ***"
+	@echo "*** target platform.                                     ***"
+	/usr/bin/readelf --dynamic \
+            $(DBGEXE) | grep 'NEEDED'
+	@echo
+	@echo "*** Compare $(DBGEXE) file size to an expected value ***"
+	/bin/ls -lh $(DBGEXE)
+
+-include $(DBGOBJS:.o=.d)
+
+$(DBGDIR)/%.o: %$(SUFX)
+	/bin/mkdir -p $(DBGDIR)
+	$(C++) -c $(C++OPTIONS) $(DBGC++OPTIONS) $(EXECMDLINEDEFS) -o $@ $<
+
+$(BASE)/Common/C++/$(DBGDIR)/%.o: $(BASE)/Common/C++/%$(SUFX)
+	/bin/mkdir -p  $(BASE)/Common/C++/$(DBGDIR)
+	$(C++) -c $(C++OPTIONS) $(DBGC++OPTIONS) $(COMCMDLINEDEFS) -o $@ $<
+
+#
+# Other rules
+#
+
+# #### Rule to only run the C preprocessor on a source file
+# Useful for checking / debugging #include and #define
+# Using the GNU compiler -E option, nothing happens except preprocessing.
+# Example: $ make file.i
+# The above will create the preprocessed file.PRE from the source file.
+.PHONY: cpreproc
+cpreproc: $(CPREPROC)
+$(CPREPROC) : %.i : %.cpp
+	$(C++) $(C++OPTIONS) $(RELC++OPTIONS) -E $^ \
+	$(LDLIBS) $(LDFLAGS) > $@
+
+# #### Rule to tell the compiler to stop after the assembly language stage.
+# Useful for viewing assembly language code.
+# Using the GNU compiler -S option, nothing happens after assembler runs.
+# Example: $ make file.s
+# The above will create the preprocessed file.s from the source file.
+.PHONY: assembler
+assembler: $(ASSEMBLER)
+$(ASSEMBLER) : %.s : %.cpp
+	$(C++) $(C++OPTIONS) $(RELC++OPTIONS) -S $^ \
+	$(LDLIBS) $(LDFLAGS)
+
+# ### Rule to clean out executable, object, dependency *.PRE and dist files ###
+# The "-" at the beginning of the command tells GNU make ignore errors like
+# file not present etc. There is no need to delete parent directories that
+# were created with "mkdir -p", since they could have existed anyway.
+# .d files are dependency files.
+# .bc files are bitcode files from the Parfait static code analysis tool.
+.PHONY: clean
+clean:
+	-/bin/rm -f $(RELEXE) $(RELOBJS) $(RELDIR)/*.d $(RELDIR)/*.bc \
+$(DBGEXE) $(DBGOBJS) $(DBGDIR)/*.d $(DBGDIR)/*.bc \
+$(RELCOMMONOBJS) $(DBGCOMMONOBJS) \
+$(DIST_TXZ) $(TXZ) *.i *.s *.d
+
+# ### Rule to perform static code analysis ###
+# Check lint configuration before running lint
+.PHONY: lint
+lint:
+	$(LINT) $(LINTCHECKCONFIG) $(LINTINCLUDES) $(SRCS)
+	@echo
+	$(LINT) $(LINTOPTIONS) $(LINTINCLUDES) $(SRCS)
+
+# ### Rule to clean and then re-make ###
+.PHONY: remake
+remake: clean all
+
+# #### Rule to only run the preprocessor on a source file
+# Useful for checking / debugging macros
+# Using the GNU compiler -E option, nothing happens except preprocessing.
+# Example: $ make file.PRE
+# The above will create the preprocessed file.PRE from the source file.
+.PHONY: file.PRE
+%.PRE : %$(SUFX)
+	$(C++) $(LINTINCLUDES) -E $< -o $@
+
+# ### Rule to create the distribution file ###
+.PHONY: dist
+dist:
+# Copy the example child payload program to the test applications directory
+	/bin/cp $(CHILDPAYLOAD) $(TSTDIR)
+# Temporarily create an xz compressed runtime payload_agent files tarball
+	/bin/tar --exclude='*.o' --exclude='*.d' --exclude='.gitignore' \
+            $(TARCOPTIONS) $(TXZ) $(RELDIR) $(DBGDIR) $(TSTDIR)
+# Wrap the runtime tarball, GNUmakefile, systemd service unit configuration
+# file, and README.md into an xz compressed distribution tar file.
+	/bin/tar $(TARCOPTIONS) $(DIST_TXZ) \
+            $(TXZ) GNUmakefile payload_agent.service \
+            README FSW_MissionSpecific_Edit.cfg
+# Remove the xz compressed runtime  Xyload_agent files tarball.
+	/bin/rm $(TXZ)
+
+.PHONY: uninstall
+uninstall:
+# Note that ifeq ($(STAGEDIR),) tests for an empty value of $(STAGEDIR) whereas
+# ifdef($(STAGEDIR)) would just test if the $(STAGEDIR) was ever defined.
+ifeq ($(STAGEDIR),)
+# The dashes in front of the stop and disable allow the Makefile to continue
+# with the -f forced remove in case the service never started.
+	-/bin/systemctl stop $(SERVICE)
+	-/bin/systemctl disable $(SERVICE)
+	/bin/rm -f /etc/systemd/system/$(SERVICE)
+# If payload_agent has not been stopped by systemd, ensure payload_agent is
+# no longer running.
+	-/usr/bin/pkill $(EXE)
+# Remove all directories with installation directory prefix.
+	/bin/rm -rf $(INSTDIR)
+# Remove system login
+#	-/usr/sbin/userdel $(LOGIN)
+else
+	/bin/rm -rf $(STAGEDIR)
+endif
+
+.PHONY: install
+install:
+# ifeq ($(STAGEDIR),) tests for an empty value of $(STAGEDIR).
+ifeq ($(STAGEDIR),)
+# If not staging, ensure the installation is not going to occur on top of a
+# running payload_agent.
+# The dashes in front of the stop and kill allow the Makefile to continue
+# in case the service never started.
+	-/bin/systemctl stop $(SERVICE)
+# If payload_agent has not been stopped by systemd, ensure it is not running.
+	-/usr/bin/pkill $(EXE)
+# Create a group with the same name as the login
+#	/usr/sbin/groupadd -f $(LOGIN)
+# Create a system login in a group of the same name plus additional groups
+#	-/usr/sbin/useradd --system --gid $(LOGIN) $(GROUPS) $(LOGIN)
+endif
+# Set owner and group of directory to the login
+# Even if the install is being staged, using fakeroot to execute this Makefile
+# will allow the owner and group to be set to root without errors.
+	/usr/bin/install --mode $(DIRMODE) --owner=$(LOGIN) --group=$(LOGIN) \
+--directory $(STAGEDIR)$(INSTDIR)
+
+# Install files
+	/bin/tar $(TARXOPTIONS) --directory=$(STAGEDIR)$(INSTDIR) \
+--file=$(TXZ)
+
+# Set owner and group to the login
+	/bin/chown --recursive $(LOGIN) $(STAGEDIR)$(INSTDIR)
+	/bin/chgrp --recursive $(LOGIN) $(STAGEDIR)$(INSTDIR)
+
+.PHONY: systemd
+ifeq ($(STAGEDIR),)
+# If a staging directory is not defined, enable and start the systemd service.
+ENABLESERVICE := /bin/systemctl enable $(SERVICE)
+STARTSERVICE := /bin/systemctl start $(SERVICE)
+else
+# Else just pretend to have enabled and started the systemd service.
+ENABLESERVICE := true
+STARTSERVICE := true
+endif
+
+systemd:
+# Test if systemd-run (used to create and start a service) exists and is
+# non-zero in size with "test -s". If so, install the service.
+	/usr/bin/test -s /usr/bin/systemd-run && \
+/usr/bin/install -m $(DIRMODE) -d $(STAGEDIR)/etc/systemd/system && \
+/usr/bin/install -m $(FILEMODE) $(SERVICE) $(STAGEDIR)/etc/systemd/system && \
+$(ENABLESERVICE)
+# /usr/bin/install -m $(FILEMODE) $(SERVICE) $(STAGEDIR)/etc/systemd/system && \
+# $(ENABLESERVICE) && $(STARTSERVICE)
+	@echo "*** The systemd $(SERVICE) requires another service. ***"
+	@echo "*** Therefore $(SERVICE) is enabled but not started here. ***"
